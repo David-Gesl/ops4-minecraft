@@ -1,0 +1,171 @@
+---
+- name: Configure Minecraft EC2 host
+  hosts: all
+  become: true
+
+  collections:
+    - community.docker
+
+  vars:
+    aws_region: "us-east-1"
+    ecr_repository_url: ""
+    image_tag: "v1.0.1"
+    world_backup_bucket: ""
+    minecraft_container_name: "minecraft"
+    minecraft_data_dir: "/data"
+    minecraft_memory: "2G"
+    minecraft_version: "1.20.4"
+    minecraft_motd: "MESSAGE OF THE DAY David Gesl Ops 3 Minecraft"
+    rcon_password: "Password123"
+
+  tasks:
+    - name: Install runtime prerequisites
+      ansible.builtin.dnf:
+        name:
+          - docker
+          - awscli
+          - python3-pip
+        state: present
+        update_cache: true
+
+    - name: Repair AWS CLI Python dependencies after package installation
+      ansible.builtin.command: >
+        dnf reinstall -y awscli python3-urllib3 python3-requests
+      changed_when: false
+
+    - name: Install Docker SDK for Python without modifying system AWS CLI dependencies
+      ansible.builtin.command: >
+        pip3 install --no-deps docker==5.0.3 websocket-client==1.7.0
+      changed_when: false
+
+    - name: Enable and start Docker
+      ansible.builtin.systemd:
+        name: docker
+        enabled: true
+        state: started
+
+    - name: Create Minecraft data directory
+      ansible.builtin.file:
+        path: "{{ minecraft_data_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0777"
+
+    - name: Check whether local world already exists
+      ansible.builtin.stat:
+        path: "{{ minecraft_data_dir }}/world"
+      register: local_world
+
+    - name: Check whether S3 backup prefix exists
+      ansible.builtin.command: >
+        aws s3 ls s3://{{ world_backup_bucket }}/data/
+      register: s3_backup_check
+      failed_when: false
+      changed_when: false
+
+    # Best Practice: State Restoration
+    # We restore previous application state (the Minecraft world) before launching the container. 
+    # This ensures seamless continuity and prevents the app from generating a brand new, empty world.
+    - name: Restore world data from S3 before first startup
+      ansible.builtin.command: >
+        aws s3 sync s3://{{ world_backup_bucket }}/data/ {{ minecraft_data_dir }}/
+      register: restore_result
+      changed_when: "'download:' in restore_result.stdout"
+      when:
+        - not local_world.stat.exists
+        - s3_backup_check.rc == 0
+
+    # Security Best Practice: Keyless Authentication
+    # Rather than distributing an AWS access key to the server, we use the IAM instance profile. 
+    # The AWS CLI fetches temporary, rotating credentials to log Docker into ECR securely.
+    - name: Authenticate Docker to ECR using instance profile
+      ansible.builtin.shell: |
+        aws ecr get-login-password --region {{ aws_region }} \
+          | docker login --username AWS --password-stdin {{ ecr_repository_url | regex_replace('/.*$', '') }}
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Pull pinned Minecraft image from ECR
+      community.docker.docker_image:
+        name: "{{ ecr_repository_url }}"
+        tag: "{{ image_tag }}"
+        source: pull
+
+    - name: Start Minecraft server container
+      community.docker.docker_container:
+        name: "{{ minecraft_container_name }}"
+        image: "{{ ecr_repository_url }}:{{ image_tag }}"
+        state: started
+        restart_policy: always
+        published_ports:
+          - "25565:25565"
+        volumes:
+          - "{{ minecraft_data_dir }}:/data"
+        env:
+          EULA: "TRUE"
+          VERSION: "{{ minecraft_version }}"
+          MEMORY: "{{ minecraft_memory }}"
+          MOTD: "{{ minecraft_motd }}"
+          ENABLE_RCON: "true"
+          RCON_PASSWORD: "{{ rcon_password }}"
+
+    # Data Integrity Best Practice: Consistent Backups
+    # Before syncing to S3, we use 'rcon-cli save-all flush' to force the Minecraft server 
+    # to write all in-memory world changes to disk. This guarantees an atomic, non-corrupted backup.
+    - name: Install Minecraft backup script
+      ansible.builtin.copy:
+        dest: /usr/local/bin/backup-minecraft.sh
+        mode: "0755"
+        content: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          CONTAINER="{{ minecraft_container_name }}"
+          DATA_DIR="{{ minecraft_data_dir }}"
+          BUCKET="{{ world_backup_bucket }}"
+
+          if docker ps --format '{{ "{{" }}.Names{{ "}}" }}' | grep -qx "$CONTAINER"; then
+            docker exec "$CONTAINER" rcon-cli save-all flush || true
+          fi
+
+          aws s3 sync "$DATA_DIR/" "s3://$BUCKET/data/" --delete
+
+    - name: Install systemd backup service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/minecraft-backup.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Backup Minecraft world data to S3
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/bin/backup-minecraft.sh
+
+    # Operations Best Practice: Systemd Timers over Cronjobs
+    # We use a systemd timer because it integrates well with journald logging, supports advanced
+    # scheduling capabilities, prevents overlapping executions, and provides clearer dependency handling.
+    - name: Install systemd backup timer
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/minecraft-backup.timer
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Run Minecraft S3 backup every 5 minutes
+
+          [Timer]
+          OnBootSec=2min
+          OnUnitActiveSec=5min
+          Unit=minecraft-backup.service
+
+          [Install]
+          WantedBy=timers.target
+
+    - name: Enable backup timer
+      ansible.builtin.systemd:
+        name: minecraft-backup.timer
+        enabled: true
+        state: started
+        daemon_reload: true
