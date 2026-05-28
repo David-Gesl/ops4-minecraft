@@ -1,0 +1,173 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: minecraft
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: minecraft-config
+  namespace: minecraft
+data:
+  EULA: "TRUE"
+  MEMORY: "2G"
+  MOTD: "David Gesl Ops 4 Kubernetes"
+  S3_BUCKET: "ops3-minecraft-david-gesl-world-c95dad93"
+  AWS_REGION: "us-east-1"
+  AWS_DEFAULT_REGION: "us-east-1"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minecraft-data
+  namespace: minecraft
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minecraft
+  namespace: minecraft
+spec:
+  type: LoadBalancer
+  selector:
+    app: minecraft
+  ports:
+    - name: minecraft
+      port: 25565
+      targetPort: 25565
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minecraft
+  namespace: minecraft
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: minecraft
+  template:
+    metadata:
+      labels:
+        app: minecraft
+    spec:
+      terminationGracePeriodSeconds: 120
+
+      initContainers:
+        - name: restore-world
+          image: public.ecr.aws/aws-cli/aws-cli:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+
+              echo "Checking S3 restore source..."
+              aws s3 ls "s3://${S3_BUCKET}/" >/dev/null
+
+              if [ -f /data/.restored-from-s3 ]; then
+                echo "PVC already restored once; skipping restore."
+                exit 0
+              fi
+
+              if aws s3 ls "s3://${S3_BUCKET}/data/" --recursive | head -n 1 | grep -q .; then
+                echo "Restoring world data from s3://${S3_BUCKET}/data/ to /data/"
+                aws s3 sync "s3://${S3_BUCKET}/data/" /data/
+              else
+                echo "No existing S3 backup data found. Starting with empty PVC."
+              fi
+
+              date > /data/.restored-from-s3
+              echo "Restore step complete."
+          envFrom:
+            - configMapRef:
+                name: minecraft-config
+          volumeMounts:
+            - name: data-volume
+              mountPath: /data
+
+      containers:
+        - name: minecraft
+          image: 360029347985.dkr.ecr.us-east-1.amazonaws.com/ops3-minecraft-david-gesl-repo:v1.0.1
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: minecraft-config
+          ports:
+            - containerPort: 25565
+              protocol: TCP
+          volumeMounts:
+            - name: data-volume
+              mountPath: /data
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "2.5Gi"
+              cpu: "1000m"
+          startupProbe:
+            tcpSocket:
+              port: 25565
+            periodSeconds: 10
+            failureThreshold: 30
+          readinessProbe:
+            tcpSocket:
+              port: 25565
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: 25565
+            periodSeconds: 20
+            failureThreshold: 3
+
+      volumes:
+        - name: data-volume
+          persistentVolumeClaim:
+            claimName: minecraft-data
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: minecraft-s3-backup
+  namespace: minecraft
+spec:
+  schedule: "0 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: backup-world
+              image: public.ecr.aws/aws-cli/aws-cli:latest
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  echo "Backing up /data to s3://${S3_BUCKET}/data/"
+                  aws s3 sync /data/ "s3://${S3_BUCKET}/data/"
+                  echo "Backup complete."
+              envFrom:
+                - configMapRef:
+                    name: minecraft-config
+              volumeMounts:
+                - name: data-volume
+                  mountPath: /data
+          volumes:
+            - name: data-volume
+              persistentVolumeClaim:
+                claimName: minecraft-data
