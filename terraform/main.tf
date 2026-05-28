@@ -172,6 +172,84 @@ resource "aws_instance" "minecraft" {
     volume_type = "gp3"
   }
 
+  user_data_replace_on_change = true
+
+  user_data = <<-EOF
+    #!/bin/bash
+    set -euxo pipefail
+
+    exec > >(tee /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&1
+
+    echo "Starting k3s bootstrap..."
+
+    # Install required tools
+    dnf update -y
+    dnf install -y curl awscli
+
+    # Create a script to refresh ECR credentials using the IAM instance profile
+    cat << 'SCRIPT' > /usr/local/bin/refresh-ecr.sh
+    #!/bin/bash
+    set -euxo pipefail
+
+    REGION="${var.aws_region}"
+
+    # Wait for the IAM instance profile credentials to become available
+    for i in {1..30}; do
+      if aws sts get-caller-identity >/tmp/aws-identity.json 2>/tmp/aws-identity.err; then
+        break
+      fi
+
+      echo "Waiting for IAM instance profile credentials..."
+      sleep 10
+    done
+
+    ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+    REGISTRY="$${ACCOUNT_ID}.dkr.ecr.$${REGION}.amazonaws.com"
+    TOKEN=$(aws ecr get-login-password --region "$${REGION}")
+
+    mkdir -p /etc/rancher/k3s
+
+    cat << YAMLEOF > /etc/rancher/k3s/registries.yaml
+    configs:
+      "$${REGISTRY}":
+        auth:
+          username: AWS
+          password: "$${TOKEN}"
+    YAMLEOF
+
+    # Restart k3s to pick up new credentials, but only if k3s already exists and is running
+    if systemctl list-unit-files | grep -q '^k3s.service' && systemctl is-active --quiet k3s; then
+      systemctl restart k3s
+    fi
+    SCRIPT
+
+    chmod +x /usr/local/bin/refresh-ecr.sh
+
+    # Run once before installing k3s so registries.yaml exists before containerd starts
+    /usr/local/bin/refresh-ecr.sh
+
+    # Refresh the temporary ECR token every 6 hours
+    echo "0 */6 * * * root /usr/local/bin/refresh-ecr.sh" > /etc/cron.d/ecr-refresh
+
+    # Install k3s.
+    # Keep ServiceLB enabled for the Minecraft LoadBalancer Service.
+    # Disable Traefik because Minecraft does not need HTTP ingress.
+    curl -sfL https://get.k3s.io | sh -s - server --disable traefik
+
+    # Set up kubeconfig for ec2-user
+    mkdir -p /home/ec2-user/.kube
+    cp /etc/rancher/k3s/k3s.yaml /home/ec2-user/.kube/config
+    chown -R ec2-user:ec2-user /home/ec2-user/.kube
+    chmod 600 /home/ec2-user/.kube/config
+
+    echo 'export KUBECONFIG=~/.kube/config' >> /home/ec2-user/.bashrc
+
+    echo "k3s bootstrap complete!"
+
+    systemctl status k3s --no-pager
+    kubectl get nodes
+  EOF
+
   tags = {
     Name    = local.name_prefix
     Project = var.project_name
