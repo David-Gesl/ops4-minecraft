@@ -10,6 +10,7 @@ metadata:
   namespace: minecraft
 data:
   EULA: "TRUE"
+  VERSION: "1.20.4"
   MEMORY: "2G"
   MOTD: "David Gesl Ops 4 Kubernetes"
   S3_BUCKET: "ops3-minecraft-david-gesl-world-c95dad93"
