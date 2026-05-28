@@ -22,8 +22,3 @@ output "world_backup_bucket" {
   description = "S3 bucket used for Minecraft world backups"
   value       = aws_s3_bucket.world_backup.bucket
 }
-
-output "ansible_inventory" {
-  description = "Generated Ansible inventory path"
-  value       = local_file.ansible_inventory.filename
-}
