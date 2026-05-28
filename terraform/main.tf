@@ -182,9 +182,15 @@ resource "aws_instance" "minecraft" {
 
     echo "Starting k3s bootstrap..."
 
-    # Install required tools
-    dnf update -y
-    dnf install -y curl awscli
+    # Install required tools.
+    # Amazon Linux 2023 already includes curl-minimal, which provides curl.
+    # Installing full curl can conflict with curl-minimal.
+    dnf install -y awscli cronie
+
+    systemctl enable --now crond
+
+    command -v curl
+    command -v aws
 
     # Create a script to refresh ECR credentials using the IAM instance profile
     cat << 'SCRIPT' > /usr/local/bin/refresh-ecr.sh
