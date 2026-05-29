@@ -268,7 +268,3 @@ resource "aws_instance" "minecraft" {
     http_put_response_hop_limit = 2
   }
 }
-
-# -----------------------------
-# Generated Ansible Inventory
-# -----------------------------
