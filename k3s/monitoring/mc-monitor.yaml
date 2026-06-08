@@ -60,6 +60,7 @@ metadata:
   namespace: minecraft
   labels:
     app: mc-monitor
+    release: monitoring
 spec:
   selector:
     matchLabels:

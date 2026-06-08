@@ -5,6 +5,7 @@ metadata:
   namespace: monitoring
   labels:
     app: minecraft
+    release: monitoring
 spec:
   groups:
     - name: minecraft.rules
