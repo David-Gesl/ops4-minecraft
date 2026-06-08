@@ -1,0 +1,40 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: minecraft-alerts
+  namespace: monitoring
+  labels:
+    app: minecraft
+spec:
+  groups:
+    - name: minecraft.rules
+      rules:
+        - alert: MinecraftServiceUnavailable
+          expr: absent(minecraft_status_healthy) OR minecraft_status_healthy == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Minecraft service is not responding to status checks"
+            description: "mc-monitor cannot get a healthy Minecraft protocol response. Players may not be able to connect."
+            runbook_url: "https://github.com/David-Gesl/ops4-minecraft/blob/ops5-oberservability/k3s/monitoring/ops5-runbook.md#minecraftserviceunavailable"
+
+        - alert: MinecraftPodRestarting
+          expr: increase(kube_pod_container_status_restarts_total{namespace="minecraft"}[10m]) > 0
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Minecraft pod restarted recently"
+            description: "The Minecraft workload restarted within the last 10 minutes. Check previous logs and pod events for crash, OOM, or bad deploy symptoms."
+            runbook_url: "https://github.com/David-Gesl/ops4-minecraft/blob/ops5-oberservability/k3s/monitoring/ops5-runbook.md#minecraftpodrestarting"
+
+        - alert: NodeDiskUsageHigh
+          expr: 100 * (1 - (node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay"})) > 80
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Node disk usage is above 80%"
+            description: "The k3s node root filesystem is over 80% full. Monitoring data, container layers, logs, or Minecraft world data may exhaust disk."
+            runbook_url: "https://github.com/David-Gesl/ops4-minecraft/blob/ops5-oberservability/k3s/monitoring/ops5-runbook.md#nodediskusagehigh"
