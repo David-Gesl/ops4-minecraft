@@ -11,7 +11,7 @@ metadata:
 data:
   EULA: "TRUE"
   VERSION: "1.20.4"
-  MEMORY: "2G"
+  MEMORY: "1200M"
   MOTD: "David Gesl Ops 5 Observability!"
   S3_BUCKET: "ops3-minecraft-david-gesl-world-c95dad93"
   AWS_REGION: "us-east-1"
