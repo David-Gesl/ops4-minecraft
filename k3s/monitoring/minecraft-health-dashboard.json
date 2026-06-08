@@ -63,7 +63,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Player-visible Minecraft protocol health from mc-monitor. 1 means healthy; 0 means unhealthy.",
+      "description": "Player-visible Minecraft protocol health from mc-monitor. Uses max() so the panel shows a single current UP/DOWN value.",
       "fieldConfig": {
         "defaults": {
           "mappings": [
@@ -125,7 +125,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "minecraft_status_healthy",
+          "expr": "max(minecraft_status_healthy)",
           "legendFormat": "service health",
           "refId": "A"
         }
@@ -183,7 +183,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "minecraft_status_players_online_count",
+          "expr": "max(minecraft_status_players_online_count)",
           "legendFormat": "players online",
           "refId": "A"
         }
@@ -247,7 +247,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "minecraft_status_response_time_seconds",
+          "expr": "max(minecraft_status_response_time_seconds)",
           "legendFormat": "response seconds",
           "refId": "A"
         }
@@ -260,7 +260,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Container restarts for the Minecraft pod over the last hour. Healthy value is 0.",
+      "description": "Container restarts for the Minecraft pod over the last 10 minutes. Healthy value is 0.",
       "fieldConfig": {
         "defaults": {
           "decimals": 0,
@@ -309,12 +309,12 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"minecraft\",pod=~\"minecraft.*\"}[1h]))",
+          "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"minecraft\",pod=~\"minecraft.*\"}[10m]))",
           "legendFormat": "restarts",
           "refId": "A"
         }
       ],
-      "title": "Minecraft Pod Restarts Last Hour",
+      "title": "Minecraft Pod Restarts Last 10 Minutes",
       "type": "stat"
     },
     {
@@ -729,8 +729,8 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "Ops 5 Minecraft Health",
-  "uid": "ops5-minecraft-health",
-  "version": 1,
+  "title": "Ops 5 Minecraft Health v2",
+  "uid": "ops5-minecraft-health-v2",
+  "version": 2,
   "weekStart": ""
 }
