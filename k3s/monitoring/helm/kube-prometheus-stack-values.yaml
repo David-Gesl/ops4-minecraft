@@ -61,3 +61,6 @@ kubeScheduler:
 
 kubeEtcd:
   enabled: false
+
+kubeProxy:
+  enabled: false
